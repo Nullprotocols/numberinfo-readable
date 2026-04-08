@@ -2110,6 +2110,39 @@ async def cancel_command(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("✅ Operation cancelled.", reply_markup=get_main_menu(message.from_user.id))
 
+# --- Auto-detect 10-digit mobile number (only when not in any other state) ---
+@dp.message(F.text.regexp(r'^\d{10}$'))
+async def auto_number_lookup(message: types.Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state is not None:
+        return
+
+    user_id = message.from_user.id
+    if await is_user_banned(user_id):
+        return
+
+    if not await check_membership(user_id):
+        await message.reply(
+            "⚠️ Please join our channels first to use the bot.",
+            reply_markup=get_join_keyboard(),
+            parse_mode="HTML"
+        )
+        return
+
+    admin_level = await is_user_admin(user_id)
+    is_premium = await is_user_premium(user_id)
+    user = await get_user(user_id)
+    if not user:
+        await message.reply("❌ <b>User not found!</b>", parse_mode="HTML")
+        return
+
+    if not admin_level and not is_premium and user['credits'] < 1:
+        await message.reply("❌ <b>Insufficient Credits!</b>", parse_mode="HTML")
+        return
+
+    number = message.text.strip()
+    await process_api_call(message, 'num', number)
+
 # --- Main Function ---
 async def main():
     keep_alive()
