@@ -1,4 +1,4 @@
-# database.py (SQLite Version - Complete)
+# database.py (SQLite - Fixed for Render)
 import aiosqlite
 import time
 import re
@@ -7,16 +7,12 @@ from datetime import datetime, timedelta
 DB_PATH = "bot_database.db"
 
 async def get_db():
-    """Return a connection to SQLite database with dict-like rows."""
+    """Always return a new connection."""
     conn = await aiosqlite.connect(DB_PATH)
     conn.row_factory = aiosqlite.Row
     return conn
 
 def parse_time_string(time_str):
-    """
-    Parse time string like '30m', '2h', '1h30m' into minutes.
-    Returns None if invalid or 'none'.
-    """
     if not time_str or str(time_str).lower() == 'none':
         return None
     time_str = str(time_str).lower()
@@ -33,8 +29,8 @@ def parse_time_string(time_str):
 
 async def init_db():
     """Initialize all database tables."""
-    async with await get_db() as db:
-        # Users table
+    db = await get_db()
+    try:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -49,7 +45,6 @@ async def init_db():
                 premium_expiry TEXT
             )
         """)
-        # Admins table
         await db.execute("""
             CREATE TABLE IF NOT EXISTS admins (
                 user_id INTEGER PRIMARY KEY,
@@ -58,7 +53,6 @@ async def init_db():
                 added_date TEXT
             )
         """)
-        # Redeem codes table
         await db.execute("""
             CREATE TABLE IF NOT EXISTS redeem_codes (
                 code TEXT PRIMARY KEY,
@@ -70,7 +64,6 @@ async def init_db():
                 is_active INTEGER DEFAULT 1
             )
         """)
-        # Redeem logs
         await db.execute("""
             CREATE TABLE IF NOT EXISTS redeem_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -80,7 +73,6 @@ async def init_db():
                 UNIQUE(user_id, code)
             )
         """)
-        # Lookup logs
         await db.execute("""
             CREATE TABLE IF NOT EXISTS lookup_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,7 +83,6 @@ async def init_db():
                 lookup_date TEXT
             )
         """)
-        # Premium plans
         await db.execute("""
             CREATE TABLE IF NOT EXISTS premium_plans (
                 plan_id TEXT PRIMARY KEY,
@@ -100,7 +91,6 @@ async def init_db():
                 description TEXT
             )
         """)
-        # Insert default plans
         await db.execute("""
             INSERT OR IGNORE INTO premium_plans (plan_id, price, duration_days, description)
             VALUES ('weekly', 69, 7, 'Weekly Plan')
@@ -109,7 +99,6 @@ async def init_db():
             INSERT OR IGNORE INTO premium_plans (plan_id, price, duration_days, description)
             VALUES ('monthly', 199, 30, 'Monthly Plan')
         """)
-        # Discount codes
         await db.execute("""
             CREATE TABLE IF NOT EXISTS discount_codes (
                 code TEXT PRIMARY KEY,
@@ -123,17 +112,22 @@ async def init_db():
             )
         """)
         await db.commit()
+    finally:
+        await db.close()
 
 # ---------- User functions ----------
 async def get_user(user_id):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         async with db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
+    finally:
+        await db.close()
 
 async def add_user(user_id, username, referrer_id=None):
-    async with await get_db() as db:
-        # Check existing
+    db = await get_db()
+    try:
         async with db.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,)) as cursor:
             exists = await cursor.fetchone()
             if exists:
@@ -145,9 +139,12 @@ async def add_user(user_id, username, referrer_id=None):
             VALUES (?, ?, ?, ?, ?, 0, 0, ?, 0, NULL)
         """, (user_id, username, credits, current_time, referrer_id, current_time))
         await db.commit()
+    finally:
+        await db.close()
 
 async def update_credits(user_id, amount):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         if amount > 0:
             await db.execute("UPDATE users SET credits = credits + ?, total_earned = total_earned + ? WHERE user_id = ?",
                              (amount, amount, user_id))
@@ -155,33 +152,48 @@ async def update_credits(user_id, amount):
             await db.execute("UPDATE users SET credits = credits + ? WHERE user_id = ?",
                              (amount, user_id))
         await db.commit()
+    finally:
+        await db.close()
 
 async def set_ban_status(user_id, status):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         await db.execute("UPDATE users SET is_banned = ? WHERE user_id = ?", (status, user_id))
         await db.commit()
+    finally:
+        await db.close()
 
 async def get_all_users():
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         async with db.execute("SELECT user_id FROM users") as cursor:
             rows = await cursor.fetchall()
             return [row['user_id'] for row in rows]
+    finally:
+        await db.close()
 
 async def get_user_by_username(username):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         async with db.execute("SELECT user_id FROM users WHERE username = ?", (username,)) as cursor:
             row = await cursor.fetchone()
             return row['user_id'] if row else None
+    finally:
+        await db.close()
 
 async def update_last_active(user_id):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         await db.execute("UPDATE users SET last_active = ? WHERE user_id = ?",
                          (datetime.now().isoformat(), user_id))
         await db.commit()
+    finally:
+        await db.close()
 
 # ---------- Premium functions ----------
 async def set_user_premium(user_id, days=None):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         if days:
             expiry = (datetime.now() + timedelta(days=days)).isoformat()
             await db.execute("UPDATE users SET is_premium = 1, premium_expiry = ? WHERE user_id = ?",
@@ -190,15 +202,21 @@ async def set_user_premium(user_id, days=None):
             await db.execute("UPDATE users SET is_premium = 1, premium_expiry = NULL WHERE user_id = ?",
                              (user_id,))
         await db.commit()
+    finally:
+        await db.close()
 
 async def remove_user_premium(user_id):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         await db.execute("UPDATE users SET is_premium = 0, premium_expiry = NULL WHERE user_id = ?",
                          (user_id,))
         await db.commit()
+    finally:
+        await db.close()
 
 async def is_user_premium(user_id):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         async with db.execute("SELECT is_premium, premium_expiry FROM users WHERE user_id = ?", (user_id,)) as cursor:
             row = await cursor.fetchone()
             if not row:
@@ -213,48 +231,68 @@ async def is_user_premium(user_id):
                     await remove_user_premium(user_id)
                     return False
             return True
+    finally:
+        await db.close()
 
 async def get_premium_users():
-    """Return list of (user_id, username, premium_expiry) for all premium users."""
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         async with db.execute("SELECT user_id, username, premium_expiry FROM users WHERE is_premium = 1") as cursor:
             return await cursor.fetchall()
+    finally:
+        await db.close()
 
 async def get_users_with_min_credits(min_credits=100):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         async with db.execute("SELECT user_id, username, credits FROM users WHERE credits >= ? ORDER BY credits DESC",
                               (min_credits,)) as cursor:
             return await cursor.fetchall()
+    finally:
+        await db.close()
 
 # ---------- Premium plans ----------
 async def get_plan_price(plan_id):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         async with db.execute("SELECT price FROM premium_plans WHERE plan_id = ?", (plan_id,)) as cursor:
             row = await cursor.fetchone()
             return row['price'] if row else None
+    finally:
+        await db.close()
 
 async def update_plan_price(plan_id, price):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         await db.execute("UPDATE premium_plans SET price = ? WHERE plan_id = ?", (price, plan_id))
         await db.commit()
+    finally:
+        await db.close()
 
 # ---------- Discount codes ----------
 async def create_discount_code(code, plan_id, discount_percent, max_uses, expiry_minutes=None):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         await db.execute("""
             INSERT OR REPLACE INTO discount_codes
             (code, plan_id, discount_percent, max_uses, expiry_minutes, created_date, is_active)
             VALUES (?, ?, ?, ?, ?, ?, 1)
         """, (code, plan_id, discount_percent, max_uses, expiry_minutes, datetime.now().isoformat()))
         await db.commit()
+    finally:
+        await db.close()
 
 async def get_discount_by_code(code):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         async with db.execute("SELECT discount_percent, plan_id, max_uses, current_uses, expiry_minutes, created_date, is_active FROM discount_codes WHERE code = ?", (code,)) as cursor:
             return await cursor.fetchone()
+    finally:
+        await db.close()
 
 async def redeem_discount_code(user_id, code, plan_id):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         async with db.execute("SELECT discount_percent, max_uses, current_uses, expiry_minutes, created_date, is_active FROM discount_codes WHERE code = ?", (code,)) as cursor:
             data = await cursor.fetchone()
             if not data:
@@ -276,20 +314,25 @@ async def redeem_discount_code(user_id, code, plan_id):
             await db.execute("UPDATE discount_codes SET current_uses = current_uses + 1 WHERE code = ?", (code,))
             await db.commit()
             return discount_percent
+    finally:
+        await db.close()
 
 # ---------- Redeem codes (regular) ----------
 async def create_redeem_code(code, amount, max_uses, expiry_minutes=None):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         await db.execute("""
             INSERT OR REPLACE INTO redeem_codes
             (code, amount, max_uses, expiry_minutes, created_date, is_active)
             VALUES (?, ?, ?, ?, ?, 1)
         """, (code, amount, max_uses, expiry_minutes, datetime.now().isoformat()))
         await db.commit()
+    finally:
+        await db.close()
 
 async def redeem_code_db(user_id, code):
-    async with await get_db() as db:
-        # Check already claimed
+    db = await get_db()
+    try:
         async with db.execute("SELECT 1 FROM redeem_logs WHERE user_id = ? AND code = ?", (user_id, code)) as cursor:
             already = await cursor.fetchone()
             if already:
@@ -314,39 +357,51 @@ async def redeem_code_db(user_id, code):
                 if datetime.now() > created_dt + timedelta(minutes=expiry_minutes):
                     return "expired"
 
-        # Update uses
         await db.execute("UPDATE redeem_codes SET current_uses = current_uses + 1 WHERE code = ?", (code,))
-        # Add credits to user
         await db.execute("UPDATE users SET credits = credits + ?, total_earned = total_earned + ? WHERE user_id = ?",
                          (amount, amount, user_id))
-        # Log claim
         await db.execute("INSERT INTO redeem_logs (user_id, code, claimed_date) VALUES (?, ?, ?)",
                          (user_id, code, datetime.now().isoformat()))
         await db.commit()
         return amount
+    finally:
+        await db.close()
 
 async def get_all_codes():
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         async with db.execute("SELECT code, amount, max_uses, current_uses, expiry_minutes, created_date, is_active FROM redeem_codes ORDER BY created_date DESC") as cursor:
             return await cursor.fetchall()
+    finally:
+        await db.close()
 
 async def deactivate_code(code):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         await db.execute("UPDATE redeem_codes SET is_active = 0 WHERE code = ?", (code,))
         await db.commit()
+    finally:
+        await db.close()
 
 async def get_active_codes():
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         async with db.execute("SELECT code, amount, max_uses, current_uses FROM redeem_codes WHERE is_active = 1") as cursor:
             return await cursor.fetchall()
+    finally:
+        await db.close()
 
 async def get_inactive_codes():
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         async with db.execute("SELECT code, amount, max_uses, current_uses FROM redeem_codes WHERE is_active = 0") as cursor:
             return await cursor.fetchall()
+    finally:
+        await db.close()
 
 async def get_expired_codes():
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         now = datetime.now().isoformat()
         async with db.execute("""
             SELECT code, amount, current_uses, max_uses, expiry_minutes, created_date
@@ -355,14 +410,20 @@ async def get_expired_codes():
               AND datetime(created_date, '+' || expiry_minutes || ' minutes') < datetime(?)
         """, (now,)) as cursor:
             return await cursor.fetchall()
+    finally:
+        await db.close()
 
 async def delete_redeem_code(code):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         await db.execute("DELETE FROM redeem_codes WHERE code = ?", (code,))
         await db.commit()
+    finally:
+        await db.close()
 
 async def get_code_usage_stats(code):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         async with db.execute("""
             SELECT 
                 rc.amount, rc.max_uses, rc.current_uses,
@@ -374,18 +435,24 @@ async def get_code_usage_stats(code):
             GROUP BY rc.code
         """, (code,)) as cursor:
             return await cursor.fetchone()
+    finally:
+        await db.close()
 
 # ---------- Lookup logs ----------
 async def log_lookup(user_id, api_type, input_data, result):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         await db.execute("""
             INSERT INTO lookup_logs (user_id, api_type, input_data, result, lookup_date)
             VALUES (?, ?, ?, ?, ?)
         """, (user_id, api_type, input_data[:500], str(result)[:1000], datetime.now().isoformat()))
         await db.commit()
+    finally:
+        await db.close()
 
 async def get_user_lookups(user_id, limit=20):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         async with db.execute("""
             SELECT api_type, input_data, lookup_date
             FROM lookup_logs
@@ -394,25 +461,34 @@ async def get_user_lookups(user_id, limit=20):
             LIMIT ?
         """, (user_id, limit)) as cursor:
             return await cursor.fetchall()
+    finally:
+        await db.close()
 
 async def get_total_lookups():
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         async with db.execute("SELECT COUNT(*) FROM lookup_logs") as cursor:
             row = await cursor.fetchone()
             return row[0] if row else 0
+    finally:
+        await db.close()
 
 async def get_lookup_stats(user_id=None):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         if user_id:
             async with db.execute("SELECT api_type, COUNT(*) FROM lookup_logs WHERE user_id = ? GROUP BY api_type", (user_id,)) as cursor:
                 return await cursor.fetchall()
         else:
             async with db.execute("SELECT api_type, COUNT(*) FROM lookup_logs GROUP BY api_type") as cursor:
                 return await cursor.fetchall()
+    finally:
+        await db.close()
 
 # ---------- Statistics ----------
 async def get_bot_stats():
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         async with db.execute("SELECT COUNT(*) FROM users") as cursor:
             total_users = (await cursor.fetchone())[0]
         async with db.execute("SELECT COUNT(*) FROM users WHERE credits > 0") as cursor:
@@ -427,9 +503,12 @@ async def get_bot_stats():
             'total_credits': total_credits,
             'credits_distributed': credits_distributed
         }
+    finally:
+        await db.close()
 
 async def get_user_stats(user_id):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         async with db.execute("SELECT COUNT(*) FROM users WHERE referrer_id = ?", (user_id,)) as cursor:
             referrals = (await cursor.fetchone())[0]
         async with db.execute("SELECT COUNT(*) FROM redeem_logs WHERE user_id = ?", (user_id,)) as cursor:
@@ -445,14 +524,20 @@ async def get_user_stats(user_id):
             'codes_claimed': codes_claimed,
             'total_from_codes': total_from_codes
         }
+    finally:
+        await db.close()
 
 async def get_recent_users(limit=20):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         async with db.execute("SELECT user_id, username, joined_date FROM users ORDER BY joined_date DESC LIMIT ?", (limit,)) as cursor:
             return await cursor.fetchall()
+    finally:
+        await db.close()
 
 async def get_top_referrers(limit=10):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         async with db.execute("""
             SELECT referrer_id, COUNT(*) as referrals
             FROM users
@@ -462,37 +547,52 @@ async def get_top_referrers(limit=10):
             LIMIT ?
         """, (limit,)) as cursor:
             return await cursor.fetchall()
+    finally:
+        await db.close()
 
 async def get_users_in_range(start_date, end_date):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         async with db.execute("""
             SELECT user_id, username, credits, joined_date FROM users
             WHERE CAST(joined_date AS REAL) BETWEEN ? AND ?
         """, (start_date, end_date)) as cursor:
             return await cursor.fetchall()
+    finally:
+        await db.close()
 
 async def get_leaderboard(limit=10):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         async with db.execute("SELECT user_id, username, credits FROM users WHERE is_banned = 0 ORDER BY credits DESC LIMIT ?", (limit,)) as cursor:
             return await cursor.fetchall()
+    finally:
+        await db.close()
 
 async def get_low_credit_users():
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         async with db.execute("SELECT user_id, username, credits FROM users WHERE credits <= 5 ORDER BY credits ASC") as cursor:
             return await cursor.fetchall()
+    finally:
+        await db.close()
 
 async def get_inactive_users(days=30):
-    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
-    async with await get_db() as db:
+    db = await get_db()
+    try:
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
         async with db.execute("""
             SELECT user_id, username, last_active FROM users
             WHERE last_active < ? AND is_banned = 0
             ORDER BY last_active ASC
         """, (cutoff,)) as cursor:
             return await cursor.fetchall()
+    finally:
+        await db.close()
 
 async def get_daily_stats(days=7):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         async with db.execute("""
             SELECT 
                 strftime('%Y-%m-%d', datetime(joined_date, 'unixepoch')) as join_date,
@@ -505,32 +605,47 @@ async def get_daily_stats(days=7):
             ORDER BY join_date DESC
         """, (-days,)) as cursor:
             return await cursor.fetchall()
+    finally:
+        await db.close()
 
 # ---------- Admin management ----------
 async def add_admin(user_id, level='admin'):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         await db.execute("INSERT OR REPLACE INTO admins (user_id, level) VALUES (?, ?)", (user_id, level))
         await db.commit()
+    finally:
+        await db.close()
 
 async def remove_admin(user_id):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         await db.execute("DELETE FROM admins WHERE user_id = ?", (user_id,))
         await db.commit()
+    finally:
+        await db.close()
 
 async def get_all_admins():
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         async with db.execute("SELECT user_id, level FROM admins") as cursor:
             return await cursor.fetchall()
+    finally:
+        await db.close()
 
 async def is_admin(user_id):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         async with db.execute("SELECT level FROM admins WHERE user_id = ?", (user_id,)) as cursor:
             row = await cursor.fetchone()
             return row['level'] if row else None
+    finally:
+        await db.close()
 
 # ---------- Utility ----------
 async def search_users(query):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         try:
             q_int = int(query)
         except:
@@ -541,21 +656,30 @@ async def search_users(query):
             LIMIT 20
         """, (f"%{query}%", q_int)) as cursor:
             return await cursor.fetchall()
+    finally:
+        await db.close()
 
 async def delete_user(user_id):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         await db.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
         await db.execute("DELETE FROM redeem_logs WHERE user_id = ?", (user_id,))
         await db.execute("UPDATE users SET referrer_id = NULL WHERE referrer_id = ?", (user_id,))
         await db.commit()
+    finally:
+        await db.close()
 
 async def reset_user_credits(user_id):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         await db.execute("UPDATE users SET credits = 0 WHERE user_id = ?", (user_id,))
         await db.commit()
+    finally:
+        await db.close()
 
 async def bulk_update_credits(user_ids, amount):
-    async with await get_db() as db:
+    db = await get_db()
+    try:
         for uid in user_ids:
             if amount > 0:
                 await db.execute("UPDATE users SET credits = credits + ?, total_earned = total_earned + ? WHERE user_id = ?",
@@ -564,3 +688,5 @@ async def bulk_update_credits(user_ids, amount):
                 await db.execute("UPDATE users SET credits = credits + ? WHERE user_id = ?",
                                  (amount, uid))
         await db.commit()
+    finally:
+        await db.close()
