@@ -303,11 +303,74 @@ def format_number_result(data, input_number):
             lines.append(f"🆔 <b>ID:</b> <code>{rec['id']}</code>")
         lines.append("")
     if len(records) > 5:
-        lines.append(f"<i>... and {len(records)-5} more records (check attached file for full data)</i>")
+        lines.append(f"<i>... and {len(records)-5} more records (check attached files & messages below)</i>")
     lines.append("━━━━━━━━━━━━━━━━━━━━")
     lines.append(f"👨‍💻 <b>Developer:</b> {DEV_USERNAME}")
     lines.append(f"⚡ <b>Powered by:</b> {POWERED_BY}")
     return "\n".join(lines), total
+
+def generate_full_text_response(data, input_number):
+    """Returns full human‑readable text (with emojis) for all records."""
+    if not isinstance(data, dict) or 'result' not in data:
+        return ""
+    records = data.get('result', [])
+    if not records:
+        return ""
+    lines = []
+    lines.append(f"📱 Number Lookup Result for {input_number}")
+    lines.append(f"📊 Total Records Found: {len(records)}\n")
+    for idx, rec in enumerate(records, 1):
+        lines.append(f"━━━ Record {idx} ━━━")
+        if rec.get('name'):
+            lines.append(f"👤 Name: {rec['name']}")
+        if rec.get('father_name'):
+            lines.append(f"👨 Father: {rec['father_name']}")
+        if rec.get('mobile'):
+            lines.append(f"📞 Mobile: {rec['mobile']}")
+        if rec.get('alternate'):
+            lines.append(f"📞 Alternate: {rec['alternate']}")
+        if rec.get('email'):
+            lines.append(f"📧 Email: {rec['email']}")
+        if rec.get('address'):
+            lines.append(f"🏠 Address: {rec['address']}")
+        if rec.get('circle'):
+            lines.append(f"📡 Circle: {rec['circle']}")
+        if rec.get('id'):
+            lines.append(f"🆔 ID: {rec['id']}")
+        lines.append("")
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
+    lines.append(f"👨‍💻 Developer: {DEV_USERNAME}")
+    lines.append(f"⚡ Powered by: {POWERED_BY}")
+    return "\n".join(lines)
+
+async def send_long_message_in_parts(target, text: str, parse_mode=None):
+    """Splits long text into chunks < 4000 chars and sends as separate messages."""
+    max_len = 4000
+    lines = text.split('\n')
+    chunks = []
+    current_chunk = ""
+    for line in lines:
+        if len(current_chunk) + len(line) + 1 <= max_len:
+            current_chunk += line + '\n'
+        else:
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+            if len(line) > max_len:
+                for i in range(0, len(line), max_len):
+                    chunks.append(line[i:i+max_len])
+                current_chunk = ""
+            else:
+                current_chunk = line + '\n'
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+    for chunk in chunks:
+        try:
+            if hasattr(target, 'reply'):
+                await target.reply(chunk, parse_mode=parse_mode, disable_web_page_preview=True)
+            else:
+                await bot.send_message(target, chunk, parse_mode=parse_mode, disable_web_page_preview=True)
+        except Exception as e:
+            logging.error(f"Failed to send chunk: {e}")
 
 async def is_user_owner(user_id):
     return user_id == OWNER_ID
@@ -411,7 +474,14 @@ async def process_api_call(message: types.Message, api_type: str, input_data: st
         if formatted_text is None:
             await message.reply("❌ No data found or invalid response.", parse_mode="HTML")
             return
+        
+        # Send summary message (first 5 records)
+        await message.reply(formatted_text, parse_mode="HTML", disable_web_page_preview=True)
+        
+        pdf_generated = False
+        pdf_file_path = None
         if total_records > 5:
+            # TXT file
             txt_file = create_readable_txt_file(raw_data, api_type, input_data)
             await message.reply_document(
                 FSInputFile(txt_file, filename=f"number_{input_data}_readable.txt"),
@@ -419,6 +489,8 @@ async def process_api_call(message: types.Message, api_type: str, input_data: st
                 parse_mode="HTML"
             )
             os.unlink(txt_file)
+            
+            # PDF file
             try:
                 pdf_path = create_styled_pdf(raw_data, input_data)
                 await message.reply_document(
@@ -429,7 +501,8 @@ async def process_api_call(message: types.Message, api_type: str, input_data: st
                             f"<i>Styled for easy reading</i>",
                     parse_mode="HTML"
                 )
-                os.unlink(pdf_path)
+                pdf_generated = True
+                pdf_file_path = pdf_path
             except Exception as e:
                 logging.error(f"PDF generation failed: {e}")
                 with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as f:
@@ -440,7 +513,15 @@ async def process_api_call(message: types.Message, api_type: str, input_data: st
                     caption="⚠️ PDF generation failed, sending raw JSON instead."
                 )
                 os.unlink(json_file)
-        await message.reply(formatted_text, parse_mode="HTML", disable_web_page_preview=True)
+            
+            # Send full text in multiple messages
+            full_text = generate_full_text_response(raw_data, input_data)
+            if full_text:
+                await send_long_message_in_parts(message, full_text, parse_mode=None)
+            
+            if pdf_generated and pdf_file_path:
+                os.unlink(pdf_file_path)
+        
         log_channel = LOG_CHANNELS.get(api_type)
         if log_channel:
             try:
@@ -449,14 +530,33 @@ async def process_api_call(message: types.Message, api_type: str, input_data: st
                 log_msg = f"📊 <b>Lookup Log - NUMBER</b>\n\n{user_info}\n🔎 Input: {input_data}\n📅 {datetime.now().strftime('%d-%m-%Y %H:%M')}\n\n"
                 log_msg += formatted_text[:1000] + ("..." if len(formatted_text) > 1000 else "")
                 await bot.send_message(int(log_channel), log_msg, parse_mode="HTML")
+                
                 if total_records > 5:
-                    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as f:
-                        json.dump(raw_data, f, indent=2)
-                        temp_file = f.name
-                    await bot.send_document(int(log_channel), FSInputFile(temp_file), caption=f"Full JSON data for {input_data}")
-                    os.unlink(temp_file)
+                    # TXT file for log
+                    full_text_log = generate_full_text_response(raw_data, input_data)
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+                        f.write(full_text_log)
+                        log_txt_path = f.name
+                    await bot.send_document(int(log_channel), FSInputFile(log_txt_path),
+                                            caption=f"📄 TXT Report for {input_data}")
+                    os.unlink(log_txt_path)
+                    
+                    # PDF for log
+                    try:
+                        pdf_log_path = create_styled_pdf(raw_data, input_data)
+                        await bot.send_document(int(log_channel), FSInputFile(pdf_log_path),
+                                                caption=f"📑 PDF Report for {input_data}")
+                        os.unlink(pdf_log_path)
+                    except:
+                        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as f:
+                            json.dump(raw_data, f, indent=2)
+                            log_json = f.name
+                        await bot.send_document(int(log_channel), FSInputFile(log_json),
+                                                caption=f"📄 JSON data for {input_data}")
+                        os.unlink(log_json)
             except Exception as e:
                 logging.error(f"Log channel error: {e}")
+        
         await log_lookup(user_id, api_type, input_data, json.dumps(raw_data)[:1000])
         await update_last_active(user_id)
         return
@@ -671,7 +771,7 @@ async def ask_api_input(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer(
         f"<b>{instructions}</b>\n\n"
         f"<i>Type /cancel to cancel</i>\n\n"
-        f"📄 <i>Note: Large responses will be sent as files</i>",
+        f"📄 <i>Note: Large responses will be sent as files and split messages</i>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_api")]])
     )
@@ -1939,7 +2039,8 @@ async def premium_users_pagination(callback: types.CallbackQuery, state: FSMCont
 async def daily_backup():
     try:
         csv_backup = f"backup_users_{datetime.now().strftime('%Y%m%d')}.csv"
-        async with await get_db() as db:
+        db = await get_db()
+        try:
             async with db.execute("SELECT * FROM users") as cursor:
                 rows = await cursor.fetchall()
                 if rows:
@@ -1949,6 +2050,8 @@ async def daily_backup():
                         writer.writerow(col_names)
                         for row in rows:
                             writer.writerow([row[col] for col in col_names])
+        finally:
+            await db.close()
         txt_backup = f"backup_stats_{datetime.now().strftime('%Y%m%d')}.txt"
         stats = await get_bot_stats()
         total_lookups = await get_total_lookups()
